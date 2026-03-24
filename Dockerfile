@@ -1,9 +1,9 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV LANG=C.UTF-8 
-ENV LC_ALL=C.UTF-8 
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
 # --- System packages ---
 RUN apt-get update && apt-get install -y \
@@ -15,65 +15,58 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Workdir ---
 WORKDIR /workspace
 
 # --- Upgrade pip ---
 RUN python3 -m pip install --upgrade pip
 
-# --- Install PyTorch (CUDA 12.1) ---
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# --- PyTorch (CUDA 12.6) ---
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 
-# --- Performance libs ---
+# --- Performance libraries ---
 RUN pip install xformers insightface
 
-# --- Install ComfyUI  ---
+# ==================== COMFYUI ====================
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /workspace/ComfyUI
+
 WORKDIR /workspace/ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git .
 
-
-# --- Installing Basic Python Dependencies ---
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- Install custom nodes ---
+# ==================== CUSTOM NODES ====================
 WORKDIR /workspace/ComfyUI/custom_nodes
 
-# --- costom Git ---
- 
+# Git config для больших клонов
 RUN git config --global http.postBuffer 1048576000 && \
     git config --global http.lowSpeedLimit 0 && \
     git config --global http.lowSpeedTime 999999
 
-RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager
-RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus
-RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack
-RUN git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux
-RUN git clone --depth 1 https://github.com/kijai/ComfyUI-SUPIR
-RUN git clone --depth 1 https://github.com/ssitu/ComfyUI_UltimateSDUpscale
-RUN git clone --depth 1 https://github.com/jags111/efficiency-nodes-comfyui
-RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Inspire-Pack
-RUN git clone --depth 1 https://github.com/WASasquatch/was-node-suite-comfyui
-RUN git clone --depth 1 https://github.com/chrisgoringe/cg-use-everywhere
-RUN git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts
+RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager && \
+    git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack && \
+    git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux && \
+    git clone --depth 1 https://github.com/kijai/ComfyUI-SUPIR && \
+    git clone --depth 1 https://github.com/ssitu/ComfyUI_UltimateSDUpscale && \
+    git clone --depth 1 https://github.com/jags111/efficiency-nodes-comfyui && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Inspire-Pack && \
+    git clone --depth 1 https://github.com/WASasquatch/was-node-suite-comfyui && \
+    git clone --depth 1 https://github.com/chrisgoringe/cg-use-everywhere && \
+    git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts
 
-# --- Install ALL node dependencies automatically ---
-RUN for d in /workspace/ComfyUI/custom_nodes/* ; do \
-    if [ -f "$d/requirements.txt" ]; then \
-        echo "Installing requirements for $d..." && \
-        pip install --no-cache-dir -r "$d/requirements.txt" || true; \
-    fi \
-done
+# --- Установка зависимостей всех нод ---
+RUN for d in *; do \
+        if [ -f "$d/requirements.txt" ]; then \
+            echo "Installing requirements for $d..." && \
+            pip install --no-cache-dir -r "$d/requirements.txt" || echo "Skipped $d"; \
+        fi; \
+    done
 
-# --- Cleanup (reduce image size) ---
+# --- Cleanup ---
 RUN pip cache purge
 
-# --- Back to root ---
+# --- Final setup ---
 WORKDIR /workspace/ComfyUI
 
-# --- Port for RunPod ---
 EXPOSE 8188
 
-# --- Start ComfyUI ---
 CMD ["python3", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
-
-
