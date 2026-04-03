@@ -1,65 +1,66 @@
 FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
 
+# Настройки среды
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    HF_HOME=/workspace/models/huggingface \
+    TORCH_HOME=/workspace/models/torch \
+    COMFYUI_PATH=/opt/ComfyUI
 
-# 1. Системные пакеты (добавлен python3-dev для сборки нод)
+# 1. Системные зависимости
 RUN apt-get update && apt-get install -y \
-    python3-pip python3-dev build-essential \
-    git wget libgl1 libglib2.0-0 \
+    python3-pip python3-dev python3-venv git wget curl \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Ставим всё приложение в /opt (эта папка НЕ затрется сетевым диском)
-WORKDIR /opt
+# 2. Обновление Python инструментов
+RUN python3 -m pip install --upgrade pip setuptools wheel
 
-RUN python3 -m pip install --upgrade pip
+# 3. PyTorch (CUDA 12) + ONNX + Insightface
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+RUN pip install xformers insightface
+RUN pip install onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 
-# PyTorch для CUDA 12.6
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-RUN pip install xformers insightface onnxruntime-gpu
-
-# Установка ComfyUI
+# 4. Установка ComfyUI
+WORKDIR ${COMFYUI_PATH}
 RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git . \
     && pip install --no-cache-dir -r requirements.txt
 
-# 3. Установка Custom Nodes
-WORKDIR /opt/custom_nodes
-RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager && \
-    git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus && \
-    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack && \
-    git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux && \
-    git clone --depth 1 https://github.com/kijai/ComfyUI-SUPIR && \
-    git clone --depth 1 https://github.com/ssitu/ComfyUI_UltimateSDUpscale && \
-    git clone --depth 1 https://github.com/jags111/efficiency-nodes-comfyui && \
-    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Inspire-Pack && \
-    git clone --depth 1 https://github.com/WASasquatch/was-node-suite-comfyui && \
-    git clone --depth 1 https://github.com/chrisgoringe/cg-use-everywhere && \
-    git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts
+# 5. Установка Custom Nodes (Твой набор для Flux и апскейла)
+WORKDIR ${COMFYUI_PATH}/custom_nodes
+RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager.git && \
+    git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus.git && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack.git && \
+    git clone --depth 1 https://github.com/Fannovel16/comfyui_controlnet_aux.git && \
+    git clone --depth 1 https://github.com/kijai/ComfyUI-SUPIR.git && \
+    git clone --depth 1 https://github.com/ssitu/ComfyUI_UltimateSDUpscale.git && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Inspire-Pack.git && \
+    git clone --depth 1 https://github.com/chrisgoringe/cg-use-everywhere.git && \
+    git clone --depth 1 https://github.com/XLabs-AI/x-flux-comfyui.git && \
+    git clone --depth 1 https://github.com/kijai/ComfyUI-FluxTrainer.git && \
+    git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git
 
-# Установка зависимостей нод
-RUN for d in *; do [ -f "$d/requirements.txt" ] && pip install --no-cache-dir -r "$d/requirements.txt" || true; done
+# Установка зависимостей всех нод
+RUN for dir in ./*/; do \
+        if [ -f "${dir}requirements.txt" ]; then \
+            pip install --no-cache-dir -r "${dir}requirements.txt" || true; \
+        fi; \
+    done
 
-# 4. Скрипт запуска, который «подружит» ComfyUI и твой Network Volume
-RUN echo '#!/bin/bash\n\
-set -e\n\
-echo "--- Initializing RunPod Network Volume ---"\n\
-# Создаем структуру папок на сетевом диске, если её нет\n\
-mkdir -p /workspace/models /workspace/output /workspace/input /workspace/user\n\
-\n\
-# Удаляем стандартные папки в образе и заменяем их ссылками на сетевой диск\n\
-# Теперь все модели, которые ты скачаешь, будут жить вечно на /workspace\n\
-rm -rf /opt/models && ln -s /workspace/models /opt/models\n\
-rm -rf /opt/output && ln -s /workspace/output /opt/output\n\
-rm -rf /opt/input && ln -s /workspace/input /opt/input\n\
-# Сохраняем настройки пользователя (ноды, конфиги менеджера)\n\
-[ -d "/workspace/user" ] || cp -r /opt/user /workspace/user\n\
-rm -rf /opt/user && ln -s /workspace/user /opt/user\n\
-\n\
-cd /opt\n\
-echo "--- Starting ComfyUI ---"\n\
-exec python3 main.py --listen 0.0.0.0 --port 8188 --highvram' > /start.sh && chmod +x /start.sh
+# 6. Предустановленные LoRA (скачиваем в образ для переноса на диск)
+RUN mkdir -p ${COMFYUI_PATH}/models/loras
+WORKDIR ${COMFYUI_PATH}/models/loras
+RUN wget -q https://civitai.com/api/download/models/753339 -O "Phlux_Photorealism.safetensors" && \
+    wget -q https://civitai.com/api/download/models/993999 -O "Amateur_Photography_Flux.safetensors" && \
+    wget -q https://civitai.com/api/download/models/980278 -O "Hyper_Realism_aidma_v0.3.safetensors"
 
-WORKDIR /opt
+# 7. Скрипт запуска
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+WORKDIR ${COMFYUI_PATH}
 EXPOSE 8188
-CMD ["/start.sh"]
+
+CMD ["/bin/bash", "/start.sh"]
